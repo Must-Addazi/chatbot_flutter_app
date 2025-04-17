@@ -1,109 +1,88 @@
-import 'dart:convert';
+import 'package:chat_boot_app/bloc/chat_bot_bloc.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-class ChatBootPage extends StatefulWidget {
-  @override
-  _ChatScreenState createState() => _ChatScreenState();
-}
-
-class _ChatScreenState extends State<ChatBootPage> {
+class ChatBootPage extends StatelessWidget {
+  ChatBootPage({super.key});
+  final ScrollController scrollController = ScrollController();
   final TextEditingController _controller = TextEditingController();
-  final List<Map<String, String>> _messages = [];
-  bool _isLoading = false;
-  final String apiKey =
-      "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";
-
-  Future<void> sendMessage(String userMessage) async {
-    setState(() {
-      _messages.add({"role": "user", "content": userMessage});
-      _isLoading = true;
-    });
-
-    final Map<String, dynamic> requestBody = {
-      "model": "deepseek/deepseek-r1-zero:free",
-      "messages": [
-        {
-          "role": "system",
-          "content":
-              "You are a helpful assistant. Respond in clear, simple language.",
-        },
-        ..._messages.map(
-          (msg) => {"role": msg["role"], "content": msg["content"]},
-        ),
-      ],
-      "temperature": 0.7,
-    };
-
-    try {
-      final response = await http.post(
-        Uri.parse('https://openrouter.ai/api/v1/chat/completions'),
-        headers: {
-          "Authorization": "Bearer $apiKey",
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://yourdomain.com",
-          "X-Title": "Flutter ChatBot",
-        },
-        body: jsonEncode(requestBody),
-      );
-
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> responseData = jsonDecode(response.body);
-        final String botResponse =
-            responseData['choices'][0]['message']['content'];
-        print("response $botResponse");
-
-        setState(() {
-          _messages.add({"role": "assistant", "content": botResponse});
-        });
-      } else {
-        print("Erreur ${response.statusCode}: ${response.body}");
-      }
-    } catch (e) {
-      print("Erreur lors de l'appel API : $e");
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
+  String lastQuery = "";
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("ChatBot OpenRouter")),
+      appBar: AppBar(
+        title: Text("ChatBot OpenRouter"),
+        backgroundColor: Colors.teal,
+      ),
       body: Column(
         children: [
           Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.all(10),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                final isUser = message["role"] == "user";
-
-                return Align(
-                  alignment:
-                      isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: EdgeInsets.symmetric(vertical: 5),
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isUser ? Colors.blue : Colors.grey[300],
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      message["content"]!,
-                      style: TextStyle(
-                        color: isUser ? Colors.white : Colors.black,
+            // Correction : éviter les erreurs de hauteur
+            child: BlocBuilder<ChatBotBloc, ChatBotState>(
+              builder: (context, state) {
+                if (state is ChatBotPendingState) {
+                  return Center(child: CircularProgressIndicator());
+                } else if (state is ChatBotErrorState) {
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        "Erreur : ${state.errorMessage}",
+                        style: TextStyle(color: Colors.red),
+                        textAlign: TextAlign.center,
                       ),
-                    ),
-                  ),
-                );
+                      SizedBox(height: 10),
+                      ElevatedButton(
+                        onPressed: () {
+                          if (lastQuery.isNotEmpty) {
+                            context.read<ChatBotBloc>().add(
+                              AskLLMEvent(lastQuery),
+                            );
+                          }
+                        },
+                        child: Text("Réessayer"),
+                      ),
+                    ],
+                  );
+                } else if (state is ChatBotSuccessState ||
+                    state is ChatBotInitialState) {
+                  return ListView.builder(
+                    padding: EdgeInsets.all(10),
+                    controller: scrollController,
+                    itemCount: state.messages.length,
+                    itemBuilder: (context, index) {
+                      final message = state.messages[index];
+                      final isUser = message.role == "user";
+
+                      return Align(
+                        alignment:
+                            isUser
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                        child: Container(
+                          margin: EdgeInsets.symmetric(vertical: 5),
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isUser ? Colors.blue : Colors.grey[300],
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            message.content!,
+                            style: TextStyle(
+                              color: isUser ? Colors.white : Colors.black,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                } else {
+                  return SizedBox.shrink();
+                }
               },
             ),
           ),
-          if (_isLoading) CircularProgressIndicator(),
           Padding(
             padding: EdgeInsets.all(8.0),
             child: Row(
@@ -122,7 +101,8 @@ class _ChatScreenState extends State<ChatBootPage> {
                   onPressed: () {
                     final text = _controller.text.trim();
                     if (text.isNotEmpty) {
-                      sendMessage(text);
+                      lastQuery = text; // Stocker la requête pour le retry
+                      context.read<ChatBotBloc>().add(AskLLMEvent(text));
                       _controller.clear();
                     }
                   },
